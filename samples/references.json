@@ -1,0 +1,24 @@
+{
+  "version": "songqiao-poster-v1",
+  "faces": [
+    {"face_id": "L1", "side": "front", "left_mm": 19, "right_mm": 574},
+    {"face_id": "L2", "side": "front", "left_mm": 20, "right_mm": 575},
+    {"face_id": "R1", "side": "back", "left_mm": 21, "right_mm": 570},
+    {"face_id": "R2", "side": "back", "left_mm": 20, "right_mm": 570},
+    {"face_id": "LD", "side": "front", "left_mm": 15, "right_mm": 580},
+    {"face_id": "RD", "side": "back", "left_mm": 20, "right_mm": 585}
+  ],
+  "papers": [
+    {"paper_id": "P600", "width_mm": 600, "print_left_mm": 10, "print_right_mm": 590, "min_left_mm": 15, "min_right_mm": 20}
+  ],
+  "register_tables": [
+    {"table_id": "AB", "steps": [
+      {"register_id": "B", "front_offset_mm": 0, "back_offset_mm": 0},
+      {"register_id": "A", "front_offset_mm": -5, "back_offset_mm": 5}
+    ]},
+    {"table_id": "DISJOINT", "steps": [
+      {"register_id": "A", "front_offset_mm": 0, "back_offset_mm": 5},
+      {"register_id": "B", "front_offset_mm": 5, "back_offset_mm": 0}
+    ]}
+  ]
+}

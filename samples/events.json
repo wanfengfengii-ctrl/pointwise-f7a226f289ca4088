@@ -1,0 +1,15 @@
+[
+  {"name":"edition","method":"POST","path":"/freeze","data":{"edition_id":"festival","front_id":"L2","back_id":"R2"},"expect":{"front_id":"L2","back_id":"R2"}},
+  {"name":"proof","method":"POST","path":"/proof","data":{"edition_id":"festival","paper_id":"P600","table_id":"AB"},"expect":{"settings.A.front.margins":{"left_mm":15,"right_mm":30},"settings.A.back.margins":{"left_mm":25,"right_mm":25},"common_registers":["A","B"]}},
+  {"name":"front_a","method":"POST","path":"/trial","data":{"proof_id":{"$ref":"proof.proof_id"},"trial_id":"front-a","face_id":"L2","register_id":"A","left_mm":15,"right_mm":30},"expect":{"condition.register_id":"A","result.passed":true}},
+  {"name":"back_b","method":"POST","path":"/trial","data":{"proof_id":{"$ref":"proof.proof_id"},"trial_id":"back-b","face_id":"R2","register_id":"B","left_mm":30,"right_mm":20},"expect":{"condition.register_id":"B","result.passed":true}},
+  {"name":"pending","method":"POST","path":"/release","data":{"request_id":"night-run","edition_id":"festival","proof_id":{"$ref":"proof.proof_id"}},"expect":{"status":"pending","order":null}},
+  {"name":"back_a","method":"POST","path":"/trial","data":{"proof_id":{"$ref":"proof.proof_id"},"trial_id":"back-a","face_id":"R2","register_id":"A","left_mm":25,"right_mm":25},"expect":{"condition.register_id":"A","result.passed":true}},
+  {"name":"released","method":"POST","path":"/release","data":{"request_id":"night-run","edition_id":"festival","proof_id":{"$ref":"proof.proof_id"}},"expect":{"status":"released","order.register_id":"A"}},
+  {"name":"void_a","method":"POST","path":"/void","data":{"trial_id":"back-a","reason":"sample damaged before mounting"},"expect":{"trial_id":"back-a"}},
+  {"name":"recheck","method":"POST","path":"/start","data":{"order_id":{"$ref":"released.order.order_id"},"confirmation_id":"mount-1"},"expect":{"status":"recheck_required","receipt":null}},
+  {"name":"replacement_a","method":"POST","path":"/trial","data":{"proof_id":{"$ref":"proof.proof_id"},"trial_id":"back-a-replacement","face_id":"R2","register_id":"A","left_mm":24,"right_mm":26},"expect":{"result.passed":true}},
+  {"name":"start","method":"POST","path":"/start","data":{"order_id":{"$ref":"released.order.order_id"},"confirmation_id":"mount-1"},"expect":{"status":"started","receipt.register_id":"A","receipt.front_trial_id":"front-a","receipt.back_trial_id":"back-a-replacement"}},
+  {"name":"finish","method":"POST","path":"/finish","data":{"start_id":{"$ref":"start.receipt.start_id"},"good_count":42,"waste_count":2},"expect":{"good_count":42,"waste_count":2}},
+  {"name":"handover","method":"GET","path":"/receipt","data":{"id":{"$ref":"released.order.order_id"}},"expect":{"status":"completed","receipt.register_id":"A","receipt.front_trial_id":"front-a","receipt.back_trial_id":"back-a-replacement","completion.good_count":42,"completion.waste_count":2}}
+]
