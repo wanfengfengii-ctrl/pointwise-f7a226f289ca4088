@@ -9,10 +9,11 @@ import sqlite3
 import sys
 from tempfile import TemporaryDirectory
 from threading import Thread
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request, urlopen
 from inspect import signature
+from functools import partial
 
 from artwork.edition import EditionStore, freeze_edition
 from artwork.face import require_text
@@ -20,7 +21,9 @@ from artwork.intake import register_face
 from artwork.revisions import RevisionStore
 from printing.completion import CompletionStore, finish_print
 from printing.handover import read_handover
-from printing.receipts import ReceiptStore
+from printing.press_run import (PressResponse, PressTurnNotFound, TurnStore, feed_turn,
+                                open_turn, read_turn, yield_turn)
+from printing.receipts import ReceiptStore, StartReceipt
 from printing.start import confirm_start
 from release.issue import issue_order
 from release.orders import OrderStore
@@ -34,7 +37,8 @@ from trials.record import TrialStore, record_trial
 
 SAMPLES = Path(__file__).resolve().parents[1] / 'samples'
 STORES = (RevisionStore, EditionStore, PaperStore, RegisterStore, ProofStore,
-          TrialStore, VoidStore, RequestStore, OrderStore, ReceiptStore, CompletionStore)
+          TrialStore, VoidStore, RequestStore, OrderStore, ReceiptStore, CompletionStore,
+          TurnStore)
 POST_ROUTES = {
     '/faces': register_face,
     '/papers': register_paper,
@@ -46,6 +50,9 @@ POST_ROUTES = {
     '/release': issue_order,
     '/start': confirm_start,
     '/finish': finish_print,
+    '/press-turn': open_turn,
+    '/press-feed': feed_turn,
+    '/press-yield': yield_turn,
 }
 GET_STORES = {'/faces': RevisionStore, '/editions': EditionStore, '/papers': PaperStore,
               '/register-tables': RegisterStore, '/proof': ProofStore}
@@ -68,6 +75,9 @@ def initialize_workbench(database, sample=None) -> str | None:
     with transaction(database, write=True) as db:
         for store in STORES:
             db.execute(store.schema)
+        columns = {row[1] for row in db.execute('PRAGMA table_info(start_receipts)')}
+        if 'target_count' not in columns:
+            db.execute('ALTER TABLE start_receipts ADD COLUMN target_count TEXT')
         db.execute('''CREATE TABLE IF NOT EXISTS sample_import (
             singleton INTEGER PRIMARY KEY CHECK (singleton = 1), version TEXT NOT NULL
         )''')
@@ -89,7 +99,13 @@ def initialize_workbench(database, sample=None) -> str | None:
 
 def _json_default(value):
     if is_dataclass(value):
-        return asdict(value)
+        data = asdict(value)
+        receipt = getattr(value, 'receipt', None)
+        if receipt is not None and type(receipt) is StartReceipt and receipt.target_count is None:
+            data['receipt'].pop('target_count', None)
+        if type(value).__name__ == 'HandoverResult' and value.press_turns is None:
+            data.pop('press_turns', None)
+        return data
     raise TypeError(f'cannot serialize {type(value).__name__}')
 
 
@@ -158,11 +174,22 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
             except TypeError as exc:
                 raise ValueError(str(exc)) from exc
             result = endpoint(db, **data)
+        if isinstance(result, PressResponse):
+            return result.http_status, result.body
         if endpoint is confirm_start and result.status == 'not_found':
             return 404, result
         return 200, result
 
     def _get(self, target):
+        if target.path == '/press-turn':
+            query = parse_qs(target.query, keep_blank_values=True, strict_parsing=True,
+                             errors='strict', max_num_fields=8)
+            if query.keys() != {'id'} or len(query['id']) != 1:
+                raise ValueError('GET requires exactly one id query parameter')
+            turn_id = require_text(query['id'][0], 'id')
+            with transaction(self.server.database, write=False) as db:
+                result = read_turn(db, turn_id)
+            return result.http_status, result.body
         if target.path not in GET_STORES and target.path not in ('/receipt', '/trial'):
             return 404, {'status': 'not_found'}
         query = parse_qs(target.query, keep_blank_values=True, strict_parsing=True,
@@ -176,6 +203,8 @@ class WorkbenchHandler(BaseHTTPRequestHandler):
     def _handle(self, dispatch):
         try:
             status, result = dispatch(urlsplit(self.path))
+        except PressTurnNotFound as exc:
+            status, result = 404, {'status': 'not_found', 'error': str(exc)}
         except (ValueError, RecursionError) as exc:
             status, result = 400, {'status': 'rejected', 'error': str(exc)}
         except sqlite3.OperationalError as exc:
@@ -280,10 +309,66 @@ def _demo():
     return 0
 
 
+def _http_call(base_url):
+    def request(method, path, payload=None):
+        if method == 'GET':
+            http_request = Request(base_url + path + '?' + urlencode(payload), method='GET')
+        else:
+            http_request = Request(base_url + path, json.dumps(payload).encode('utf-8'),
+                                   {'Content-Type': 'application/json'}, method='POST')
+        try:
+            with urlopen(http_request, timeout=8) as response:
+                return response.status, json.load(response)
+        except HTTPError as response:
+            with response:
+                return response.code, json.load(response)
+
+    def post(path, **data):
+        return request('POST', path, data)
+
+    def get(path, identity):
+        return request('GET', path, {'id': identity})
+
+    return post, get
+
+
+def _press_demo():
+    try:
+        from printing.press_device import open_press
+        from printing.press_exercise import run_press_wheel
+        with TemporaryDirectory(prefix='songqiao-press-demo-') as directory:
+            database = Path(directory) / 'workbench.sqlite3'
+            initialize_workbench(database, load_sample())
+            with running_workbench(database) as base_url:
+                post, get = _http_call(base_url)
+                open_device = partial(open_press, database)
+
+                def emit(event):
+                    print(json.dumps(event, ensure_ascii=False, sort_keys=True))
+
+                try:
+                    for mode in ('drain', 'cutover'):
+                        result = run_press_wheel(post, get, open_device, mode=mode,
+                                                 emit=emit, suffix='-' + mode)
+                        print(json.dumps({'wheel': mode, 'result': result},
+                                         ensure_ascii=False, sort_keys=True))
+                except AssertionError as exc:
+                    print(f'POINTWISE_BUSINESS_FAILURE {exc}', file=sys.stderr)
+                    return 1
+                except (URLError, OSError, ValueError, KeyError, TypeError) as exc:
+                    print(f'DEMO_CALL_ERROR {exc}', file=sys.stderr)
+                    return 2
+    except (OSError, sqlite3.Error, ValueError, KeyError, TypeError) as exc:
+        print(f'DEMO_STARTUP_ERROR {exc}', file=sys.stderr)
+        return 3
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description='Songqiao duplex poster workbench')
     commands = parser.add_subparsers(dest='command', required=True)
     commands.add_parser('demo')
+    commands.add_parser('press-demo')
     init = commands.add_parser('init')
     serve = commands.add_parser('serve')
     for command in (init, serve):
@@ -293,6 +378,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.command == 'demo':
         return _demo()
+    if args.command == 'press-demo':
+        return _press_demo()
     if args.command == 'serve' and not 0 <= args.port <= 65535:
         parser.error('--port must be between 0 and 65535')
     try:

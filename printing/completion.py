@@ -2,6 +2,7 @@ from dataclasses import dataclass
 import sqlite3
 
 from artwork.face import require_text
+from printing.press_run import TurnStore, confirmed_count
 from printing.receipts import ReceiptStore
 
 
@@ -47,6 +48,18 @@ def validate_counts(good_count: int, waste_count: int) -> None:
 def finish_print(db, *, start_id, good_count, waste_count) -> Completion:
     require_text(start_id, 'start_id')
     validate_counts(good_count, waste_count)
-    if ReceiptStore(db).get_by_start(start_id) is None:
+    receipt = ReceiptStore(db).get_by_start(start_id)
+    if receipt is None:
         raise ValueError('completion requires an existing start receipt')
+    if receipt.target_count is not None:
+        open_turn = TurnStore(db).find_open()
+        if open_turn is not None and open_turn.start_id == start_id:
+            raise ValueError('a press turn is still occupying the press')
+        actual = confirmed_count(db, start_id)
+        if actual != receipt.target_count:
+            raise ValueError(
+                f'confirmed press count {actual} has not reached target {receipt.target_count}')
+        if good_count + waste_count != actual:
+            raise ValueError(
+                f'good and waste counts must sum to the confirmed press count {actual}')
     return CompletionStore(db).add(Completion(start_id, good_count, waste_count))

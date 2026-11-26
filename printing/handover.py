@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 
 from printing.completion import Completion, CompletionStore
+from printing.press_run import turn_records_for_order
 from printing.receipts import ReceiptStore, StartReceipt
 from release.orders import OrderStore, PrintOrder
 from release.recheck import unstarted_order_status
@@ -12,6 +13,7 @@ class HandoverResult:
     order: PrintOrder | None = None
     receipt: StartReceipt | None = None
     completion: Completion | None = None
+    press_turns: list[dict] | None = None
 
 
 def read_handover(db, order_id: str) -> HandoverResult:
@@ -25,4 +27,7 @@ def read_handover(db, order_id: str) -> HandoverResult:
         raise RuntimeError('started order has no stored receipt')
     completion = CompletionStore(db).get(receipt.start_id)
     status = 'completed' if completion is not None else 'started'
-    return HandoverResult(status, order, receipt, completion)
+    if receipt.target_count is None:
+        return HandoverResult(status, order, receipt, completion)
+    return HandoverResult(status, order, receipt, completion,
+                          turn_records_for_order(db, receipt.start_id))

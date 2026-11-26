@@ -2,6 +2,16 @@
   "version": 1,
   "kind": "cli",
   "setup": [],
-  "verify": ["python3", "-B", "check_project.py"],
-  "demo": ["python3", "-B", "-m", "printing.workbench", "demo"]
+  "verify": [
+    "python3",
+    "-B",
+    "check_project.py"
+  ],
+  "demo": [
+    "python3",
+    "-B",
+    "-m",
+    "printing.workbench",
+    "press-demo"
+  ]
 }
